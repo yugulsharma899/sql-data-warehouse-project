@@ -1,0 +1,178 @@
+-- Error check in silver.crm_cust_info
+
+select 
+	replace(cid, '-', '') as cid,
+	cntry
+from silver.erp_loc_a101
+where replace(cid, '-', '') not in 
+(select cst_key from silver.crm_cust_info)
+
+-- Data Standardisation & consistence
+
+select distinct 
+	cntry as old_cntry,
+	case when trim(cntry) = 'DE' THEN 'Germany'
+		 when trim(cntry) in ('US', 'USA') then 'United States'
+		 when trim(cntry) = '' or cntry is null then 'n/a'
+		 else trim(cntry)
+	end as cntry
+from silver.erp_loc_a101
+order by cntry
+
+-- Error check in silver.erp_cust_ax12
+-- Identify out of range dates
+
+select distinct 
+bdate
+from silver.erp_cust_ax12
+where bdate < '1926-01-01' or bdate > GETDATE()
+
+-- data Standardisation & Consistency
+select distinct 
+	gen,
+	case when upper(trim(gen)) in ('F', 'FEMALE') then 'Female'
+		 when upper(trim(gen)) in ('M', 'MALE') then 'Male'
+		 else 'n/a'
+	end as gen
+from silver.erp_cust_ax12
+
+select * from silver.erp_cust_ax12
+
+-- Err check in silver.crm_sales_details
+-- Check for Invalid Dates
+select 
+	nullif(sls_ship_dt, 0) sls_ship_dt
+from silver.crm_sales_details
+where sls_ship_dt <= 0
+or len(sls_ship_dt) != 8
+or sls_ship_dt > 20500101
+or sls_ship_dt < 19000101
+
+select 
+	nullif(sls_due_dt, 0) sls_due_dt
+from silver.crm_sales_details
+where sls_due_dt <= 0
+or len(sls_due_dt) != 8
+or sls_due_dt > 20500101
+or sls_due_dt < 19000101
+
+-- Check for Invalid Dates orders
+select
+	*
+from silver.crm_sales_details
+where sls_order_dt > sls_ship_dt or sls_order_dt > sls_due_dt
+
+-- Check Data consistency: Between Sales, Quantity & Price
+-- > Sales = Quantity*Price
+-- > Values must not be NULL, Zero, Negative
+
+Select distinct
+	sls_sales as old_sls_sales,
+	sls_quantity,
+	sls_price as old_sls_price,
+	case when sls_sales is null or sls_sales <=0 or sls_sales != sls_quantity * abs(sls_price)
+			then sls_quantity * abs(sls_price)
+		 else sls_sales
+	end as sls_sales,
+
+	case when sls_price is null or sls_price <= 0
+			then sls_sales / nullif(sls_quantity, 0)
+		 else sls_price
+	end as sls_price
+from silver.crm_sales_details
+where sls_sales != sls_quantity*sls_price
+or sls_sales is null
+or sls_quantity is null
+or sls_price is null
+or sls_sales <= 0
+or sls_quantity <= 0
+or sls_price <= 0
+order by sls_sales, sls_quantity, sls_price
+
+select * from silver.crm_sales_details
+
+-- Error check in silver.crm_cust_info
+-- Check for NULLS or Duplicates in Primary key
+--Expectation: No result
+
+select
+	cst_id,
+	count(*)
+from silver.crm_cust_info
+group by cst_id
+Having count(*) > 1 or cst_id is null
+
+-- Check for Unwanted Spaces
+-- Expectation: No Result
+select
+	cst_gndr
+from silver.crm_cust_info
+where cst_gndr != trim(cst_gndr)
+
+-- data standardization & consistency
+select distinct cst_gndr
+from silver.crm_cust_info
+
+select distinct cst_material_status
+from silver.crm_cust_info
+
+-- Error check in silver.crm_prd_info
+-- Checks for NULLS or Duplicates in Primary Ket
+-- Expectation: NO result
+
+select
+	prd_id,
+	count(*)
+from silver.crm_prd_info
+group by prd_id
+having count(*) > 1 or prd_id is null
+
+-- Check for unwanted Spaces
+-- Expectation: No result
+select prd_nm
+from silver.crm_prd_info
+where prd_nm != trim(prd_nm)
+
+-- Checks for NULLS or Negative Numbers
+-- Expectation: No result
+select prd_cost
+from silver.crm_prd_info
+where prd_cost < 0 or prd_cost is null
+
+-- Data Standardization & Consistency
+select distinct prd_line
+from silver.crm_prd_info
+
+-- Check for Invalid date orders
+select * from silver.crm_prd_info
+where prd_end_dt < prd_start_dt
+
+-- Creating Logic for dates
+select 
+prd_id,
+prd_key,
+prd_nm,
+prd_start_dt,
+prd_end_dt,
+LEAD(prd_start_dt) over(partition by prd_key order by prd_start_dt)-1 as prd_end_dt_test
+
+from bronze.crm_prd_info
+where prd_key in ('AC-HE-HL-U509-R', 'AC-HE-HL-U509')
+
+select * from silver.crm_prd_info
+
+-- Error check in silver.erp_px_cat_g1v2
+-- check for unwanted spaces
+select 
+	*
+from silver.erp_px_cat_g1v2
+where cat != trim(cat)
+	or subcat != trim(subcat)
+	or maintanence != TRIM(maintanence)
+
+-- Data standardization & consistency
+select distinct
+	cat,
+	subcat,
+	maintanence
+from silver.erp_px_cat_g1v2
