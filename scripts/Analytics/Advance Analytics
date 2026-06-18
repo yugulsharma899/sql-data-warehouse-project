@@ -1,0 +1,193 @@
+-- Advance Analytics
+-- 7. Change Over Time: Trends  - Analyse how a measure evolve over a time
+-- formula: Aggregate (Measure) by (Dimension)
+
+-- Analyse sales performance over time
+select
+	year(order_date) as order_year,
+	month(order_date) as order_month,
+	sum(sales_amount) as total_sales,
+	count(distinct customer_key) as total_customers,
+	sum(quantity) as total_quantity
+from gold.fact_sales
+where order_date is not null
+group by year(order_date), month(order_date) 
+order by year(order_date), month(order_date) 
+
+select
+	datetrunc(MONTH, order_date) as order_date,
+	sum(sales_amount) as total_sales,
+	count(distinct customer_key) as total_customers,
+	sum(quantity) as total_quantity
+from gold.fact_sales
+where order_date is not null
+group by datetrunc(MONTH, order_date) 
+order by datetrunc(MONTH, order_date)
+
+select
+	format(order_date, 'yyyy-MMM') as order_date,
+	sum(sales_amount) as total_sales,
+	count(distinct customer_key) as total_customers,
+	sum(quantity) as total_quantity
+from gold.fact_sales
+where order_date is not null
+group by format(order_date, 'yyyy-MMM')
+order by format(order_date, 'yyyy-MMM')
+
+-- 8. Cumulative Analysis: Aggregate the data prgressively over the time
+-- Formula: Aggregate (cumulative measure) by (date dimension)
+
+-- Calculate total sales per month
+-- The running total of sales over time
+select
+	order_date,
+	total_sales,
+	sum(total_sales) over(partition by order_date order by order_date) as running_total_sales
+	from
+	(
+	select 
+		datetrunc(month, order_date) as order_date,
+		sum(sales_amount) as total_sales
+	from gold.fact_sales
+	where order_date is not null
+	group by datetrunc(month, order_date)
+	) t
+
+-- Calculate total sales per year
+-- The running total of sales over time
+select
+	order_date,
+	total_sales,
+	sum(total_sales) over(order by order_date) as running_total_sales,
+	avg(avg_price) over(order by order_date) as moving_average_price
+	from
+	(
+	select 
+		datetrunc(YEAR, order_date) as order_date,
+		sum(sales_amount) as total_sales,
+		AVG(price) as avg_price
+	from gold.fact_sales
+	where order_date is not null
+	group by datetrunc(YEAR, order_date)
+	) t
+
+-- 9. Performance Analysis: Compare the current value to a target value
+-- Formula: current(measure) - target(measure)
+
+/* Analyse the yearly performnce of products by comparing their sales  to both the average sales performnce of the product 
+& the previous year sales */
+
+with yearly_product_sales as (
+select
+	year(f.order_date) as order_year,
+	p.product_name,
+	sum(f.sales_amount) as current_sales
+from gold.fact_sales f
+left join gold.dim_products p
+on f.product_key = p.product_key
+where order_date is not null
+group by 
+	year(f.order_date),
+	p.product_name
+)
+
+select
+	order_year,
+	product_name,
+	current_sales,
+	AVG(current_sales) over(partition by product_name) as avg_sales,
+	current_sales - AVG(current_sales) over(partition by product_name) as diff_avg,
+	case when current_sales - AVG(current_sales) over(partition by product_name) > 0 then 'Above Avg'
+		 when current_sales - AVG(current_sales) over(partition by product_name) < 0 then 'Below Avg'
+		 else 'Avg'
+	end as avg_change,
+-- Y-o-Y Analysis
+	lag(current_sales) over(partition by product_name order by order_year asc) as py_sales,
+	current_sales - lag(current_sales) over(partition by product_name order by order_year asc) as diff_py,
+	case when current_sales - lag(current_sales) over(partition by product_name order by order_year asc) > 0 then 'Increase'
+		 when current_sales - lag(current_sales) over(partition by product_name order by order_year asc) < 0 then 'Decrease'
+		 else 'No Change'
+	end as py_change
+from yearly_product_sales
+order by
+	product_name,
+	order_year
+
+-- 10. Part to whole: Analyze how an individual part is performing compared to the overall
+-- Formula: (Measure/Total Measure) *100 by (Dimension)
+-- Ex: Which categoty contribute the most to the ovrall sales
+
+with category_sales as (
+	select
+		p.category,
+		sum(f.sales_amount) as total_sales
+	from gold.fact_sales f
+	left join gold.dim_products p
+	on f.product_key = p.product_key
+	group by p.category )
+
+select 
+	category,
+	total_sales,
+	sum(total_sales) over() as overall_sales,
+	concat(round((cast(total_sales as float) / sum(total_sales) over())*100, 2), '%') as percent_of_total
+from category_sales
+order by total_sales desc
+
+-- 11. Data Segmentation: Group the data based on specific range
+-- Formula: Measure by Measure
+
+/* Ex: Segment products into cost range and count how many products fall into each segment */
+
+with product_segement as (
+select 
+	product_key,
+	product_name,
+	cost,
+	case when cost < 100 then 'Below 100'
+		 when cost between 100 and 500 then '100-500'
+		 when cost between 500 and 1000 then '500-1000'
+		 else 'Above 1000'
+	end cost_range
+from gold.dim_products) 
+
+select
+	cost_range,
+	count(product_key) as total_products
+from product_segement
+group by cost_range
+order by total_products desc
+
+/*Group customers into three segments based on their spending behavior:
+	- VIP: Customers with at least 12 months of history and spending more than €5,000.
+	- Regular: Customers with at least 12 months of history but spending €5,000 or less.
+	- New: Customers with a lifespan less than 12 months.
+And find the total number of customers by each group
+*/
+
+with customer_spending as (
+select
+	c.customer_key,
+	sum(f.sales_amount) as total_spends,
+	Min(order_date) as first_order,
+	max(order_date) as last_order,
+	DATEDIFF(MONTH, Min(order_date), max(order_date)) as lifespan
+from gold.fact_sales f
+left join gold.dim_customers c
+on f.customer_key = c.customer_key
+group by c.customer_key)
+
+
+select 
+	customer_segment,
+	count(customer_key) as total_customers
+from (
+	select
+		customer_key,
+		case when lifespan >= 12 and total_spends > 5000 then 'VIP'
+			 when lifespan >= 12 and total_spends <= 5000 then 'Regular'
+			 else 'New'
+		end as customer_segment
+	from customer_spending) t
+group by customer_segment
+order by total_customers desc
